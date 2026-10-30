@@ -91,6 +91,163 @@ class WP_Block_Supports_Block_Style_Variations_Test extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Tests that navigation links retain their variation styles in saved menus.
+	 *
+	 * @dataProvider data_navigation_link_style_variations
+	 *
+	 * @param string $mode           How to render the navigation link.
+	 * @param string $class_name     The link's block style classes.
+	 * @param int    $count          Number of links to render.
+	 * @param bool   $has_variation  Whether a variation stylesheet is expected.
+	 * @param bool   $has_custom_css Whether the link also has custom CSS.
+	 */
+	public function test_navigation_link_style_variations( $mode, $class_name, $count, $has_variation, $has_custom_css ) {
+		switch_theme( 'block-theme' );
+		$original_styles = clone wp_styles();
+		$original_user   = get_current_user_id();
+		register_block_style(
+			'core/navigation-link',
+			array(
+				'name'       => 'navigation-test',
+				'style_data' => array(
+					'spacing' => array( 'padding' => array( 'top' => '40px' ) ),
+					'border'  => array(
+						'color' => '#bb0000',
+						'width' => '10px',
+						'style' => 'dotted',
+					),
+				),
+			)
+		);
+		WP_Theme_JSON_Resolver_Gutenberg::clean_cached_data();
+
+		try {
+			wp_deregister_style( 'block-style-variation-styles' );
+			$attributes = array(
+				'label'     => 'Test link',
+				'url'       => 'https://example.org/',
+				'kind'      => 'custom',
+				'className' => $class_name,
+			);
+			if ( $has_custom_css ) {
+				// Save custom CSS as a user allowed to retain it.
+				wp_set_current_user( self::factory()->user->create( array( 'role' => 'administrator' ) ) );
+				$attributes['style']['css'] = 'letter-spacing: 3px;';
+			}
+			$content = str_repeat( '<!-- wp:navigation-link ' . wp_json_encode( $attributes ) . ' /-->', $count );
+			if ( 'reference' === $mode ) {
+				$navigation_id = self::factory()->post->create(
+					array(
+						'post_type'    => 'wp_navigation',
+						'post_status'  => 'publish',
+						'post_content' => $content,
+					)
+				);
+				$content       = '<!-- wp:navigation {"overlayMenu":"never","ref":' . $navigation_id . '} /-->';
+			} elseif ( 'inline' === $mode ) {
+				$content = '<!-- wp:navigation {"overlayMenu":"never"} -->' . $content . '<!-- /wp:navigation -->';
+			}
+
+			$html       = do_blocks( $content );
+			$styles     = wp_styles()->get_data( 'block-style-variation-styles', 'after' );
+			$stylesheet = is_array( $styles ) ? implode( '', $styles ) : '';
+			preg_match_all( '/\bis-style-navigation-test--\d+\b/', $html, $matches );
+
+			$this->assertStringContainsString( 'https://example.org/', $html );
+			if ( $has_variation ) {
+				$this->assertCount( $count, array_unique( $matches[0] ), 'Each link should have its own variation instance.' );
+				foreach ( $matches[0] as $instance_class ) {
+					$this->assertSame( 1, substr_count( $stylesheet, '.' . $instance_class . ')' ), 'Each instance should have one matching CSS rule.' );
+				}
+				$this->assertStringContainsString( 'padding-top: 40px', $stylesheet );
+				$this->assertStringContainsString( 'border-color: #bb0000', $stylesheet );
+			} else {
+				$this->assertSame( array(), $matches[0] );
+				$this->assertSame( '', $stylesheet );
+			}
+
+			if ( $has_custom_css ) {
+				$this->assertStringContainsString( 'has-custom-css', $html );
+				$custom_styles = wp_styles()->get_data( 'wp-block-custom-css', 'after' );
+				$this->assertStringContainsString( 'letter-spacing: 3px', implode( '', $custom_styles ) );
+			}
+		} finally {
+			wp_set_current_user( $original_user );
+			unregister_block_style( 'core/navigation-link', 'navigation-test' );
+			WP_Theme_JSON_Resolver_Gutenberg::clean_cached_data();
+			$GLOBALS['wp_styles'] = $original_styles;
+		}
+	}
+
+	/**
+	 * Provides navigation link variation rendering paths and controls.
+	 *
+	 * @return array[] Test arguments.
+	 */
+	public function data_navigation_link_style_variations() {
+		return array(
+			'standalone'                => array( 'standalone', 'is-style-navigation-test', 1, true, false ),
+			'inline navigation'         => array( 'inline', 'is-style-navigation-test', 1, true, false ),
+			'referenced navigation'     => array( 'reference', 'is-style-navigation-test', 1, true, false ),
+			'two referenced links'      => array( 'reference', 'is-style-navigation-test', 2, true, false ),
+			'no variation'              => array( 'reference', '', 1, false, false ),
+			'unknown variation'         => array( 'reference', 'is-style-unknown', 1, false, false ),
+			'variation with custom CSS' => array( 'reference', 'is-style-navigation-test', 1, true, true ),
+			'unknown with custom CSS'   => array( 'reference', 'is-style-unknown', 1, false, true ),
+		);
+	}
+
+	/**
+	 * Tests that referenced submenu variations precede their children's styles.
+	 */
+	public function test_referenced_navigation_variation_styles_preserve_nested_order() {
+		switch_theme( 'block-theme' );
+		$original_styles = clone wp_styles();
+		register_block_style(
+			'core/navigation-submenu',
+			array(
+				'name'       => 'navigation-parent-test',
+				'style_data' => array( 'blocks' => array( 'core/navigation-link' => array( 'color' => array( 'text' => '#ff0000' ) ) ) ),
+			)
+		);
+		register_block_style(
+			'core/navigation-link',
+			array(
+				'name'       => 'navigation-child-test',
+				'style_data' => array( 'color' => array( 'text' => '#0000ff' ) ),
+			)
+		);
+		WP_Theme_JSON_Resolver_Gutenberg::clean_cached_data();
+
+		try {
+			wp_deregister_style( 'block-style-variation-styles' );
+			$navigation_id = self::factory()->post->create(
+				array(
+					'post_type'    => 'wp_navigation',
+					'post_status'  => 'publish',
+					'post_content' => '<!-- wp:navigation-submenu {"label":"Parent","className":"is-style-navigation-parent-test"} --><!-- wp:navigation-link {"label":"Child","url":"https://example.org/child","kind":"custom","className":"is-style-navigation-child-test"} /--><!-- /wp:navigation-submenu -->',
+				)
+			);
+			$html          = do_blocks( '<!-- wp:navigation {"overlayMenu":"never","ref":' . $navigation_id . '} /-->' );
+			$styles        = wp_styles()->get_data( 'block-style-variation-styles', 'after' );
+			$stylesheet    = is_array( $styles ) ? implode( '', $styles ) : '';
+			$parent_rule   = strpos( $stylesheet, 'color: #ff0000' );
+			$child_rule    = strpos( $stylesheet, 'color: #0000ff' );
+
+			$this->assertStringContainsString( 'is-style-navigation-parent-test--', $html );
+			$this->assertStringContainsString( 'is-style-navigation-child-test--', $html );
+			$this->assertNotFalse( $parent_rule );
+			$this->assertNotFalse( $child_rule );
+			$this->assertLessThan( $child_rule, $parent_rule, 'The child variation must be able to override its parent.' );
+		} finally {
+			unregister_block_style( 'core/navigation-submenu', 'navigation-parent-test' );
+			unregister_block_style( 'core/navigation-link', 'navigation-child-test' );
+			WP_Theme_JSON_Resolver_Gutenberg::clean_cached_data();
+			$GLOBALS['wp_styles'] = $original_styles;
+		}
+	}
+
+	/**
 	 * Tests that block style variations registered via either
 	 * `gutenberg_register_block_style` with a style object, or a standalone
 	 * block style variation file within `/styles`, are added to the theme data.

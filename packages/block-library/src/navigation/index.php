@@ -347,6 +347,16 @@ class WP_Navigation_Block_Renderer {
 			$markup = apply_block_hooks_to_content_from_post_object( $markup, $navigation_post );
 			$blocks = parse_blocks( $markup );
 
+			// These roots bypass render_block_data when rendered from WP_Block_List.
+			// Prepare their variation styles before rendering any descendants.
+			foreach ( $blocks as $index => $parsed_block ) {
+				if ( defined( 'IS_GUTENBERG_PLUGIN' ) && IS_GUTENBERG_PLUGIN ) {
+					$blocks[ $index ] = gutenberg_render_block_style_variation_support_styles( $parsed_block );
+				} else {
+					$blocks[ $index ] = wp_render_block_style_variation_support_styles( $parsed_block );
+				}
+			}
+
 			// TODO - this uses the full navigation block attributes for the
 			// context which could be refined.
 			return new WP_Block_List( $blocks, $attributes );
