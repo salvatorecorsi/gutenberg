@@ -104,12 +104,17 @@ function render_block_core_post_template( $attributes, $content, $block ) {
 	while ( $query->have_posts() ) {
 		$query->the_post();
 
-		// Get an instance of the current Post Template block.
-		$block_instance = $block->parsed_block;
+		// Refresh a clone so each row has independent inner blocks with the full ancestor context.
+		$block_instance = clone $block;
+		$block_instance->refresh_context_dependents();
 
 		// Set the block name to one that does not correspond to an existing registered block.
 		// This ensures that for the inner instances of the Post Template block, we do not render any block supports.
-		$block_instance['blockName'] = 'core/null';
+		$block_instance->parsed_block['blockName'] = 'core/null';
+		$block_instance->name                      = 'core/null';
+		$block_instance->block_type                = null;
+		$block_instance->context                   = array();
+		unset( $block_instance->attributes );
 
 		$post_id              = get_the_ID();
 		$post_type            = get_post_type();
@@ -123,7 +128,7 @@ function render_block_core_post_template( $attributes, $content, $block ) {
 		add_filter( 'render_block_context', $filter_block_context, 1 );
 		// Render the inner blocks of the Post Template block with `dynamic` set to `false` to prevent calling
 		// `render_callback` and ensure that no wrapper markup is included.
-		$block_content = ( new WP_Block( $block_instance ) )->render( array( 'dynamic' => false ) );
+		$block_content = $block_instance->render( array( 'dynamic' => false ) );
 		remove_filter( 'render_block_context', $filter_block_context, 1 );
 
 		// Wrap the render inner blocks in a `li` element with the appropriate post classes.
